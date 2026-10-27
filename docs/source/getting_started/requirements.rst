@@ -13,8 +13,8 @@ Verified software requirements
 - ``pg_restore`` from PostgreSQL client 18 for reference restoration (included
   in the FANTASIA Docker image).
 - Poetry for repository installation. A PyPI package exists, but repository
-  installation is the documented path because configs and constants are
-  required.
+  installation is the documented path: it provides the example configurations,
+  sample data and ``go-basic.obo``.
 - MMseqs2 only when redundancy masking is enabled.
 
 Hardware and storage

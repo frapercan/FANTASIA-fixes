@@ -92,8 +92,9 @@ environment. You can open a Poetry shell (``poetry shell``) or prefix commands w
 
    pip3 install fantasia
 
-Then provide your own configuration so that it **resolves a correct ``constants.yaml``**.
-Use the repository as a reference for the expected configuration layout and defaults.
+Then provide your own configuration; use the repository's ``config/`` files as a
+reference for the layout and defaults. If the ``constants`` path in it does not
+exist, the ``constants.yaml`` bundled with FANTASIA is used.
 
 3) Start required services (Docker)
 ===================================

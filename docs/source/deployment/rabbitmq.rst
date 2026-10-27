@@ -11,13 +11,18 @@ is ``guest`` with password ``guest``.
    docker compose logs rabbitmq
    nc -z localhost 5672 && echo 'RabbitMQ port reachable'
 
-``delete_queues: true`` removes stale queues during normal startup/teardown.
-It deletes *every* queue on the broker (through the management API on
-``rabbitmq_port_http``), so a run that starts with ``delete_queues: true``
-removes the queues and pending tasks of any other run using the same RabbitMQ
-broker. Queue names are also fixed per model, not per run. Concurrent runs sharing one broker can also interfere
-through resources and queue naming; prefer sequential launches, or give each
-run its own broker, unless the deployment has been designed for isolation.
+``delete_queues: true`` removes stale queues at startup, through the
+management API on ``rabbitmq_port_http``. What it deletes depends on the
+installed protein-information-system:
+
+- 3.2 or later: only FANTASIA's own queues (``sequenceembedder_*`` and
+  ``embeddinglookup_*``).
+- 3.1.x: *every* queue on the broker, including other applications' queues and
+  their pending messages.
+
+Queue names are fixed per model, not per run, so two FANTASIA runs on the same
+broker always share queues. Launch runs sequentially, or give each run its own
+broker.
 
 Several users or runs can share one PostgreSQL reference database: lookup only
 reads from it. Run ``fantasia initialize`` once, since it resets the

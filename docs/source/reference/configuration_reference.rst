@@ -29,7 +29,8 @@ Global, service and execution parameters
    * - ``constants``
      - path
      - ``./fantasia/constants.yaml``
-     - Model and embedding-type registry
+     - Model and embedding-type registry; if the path does not exist, the
+       ``constants.yaml`` bundled with FANTASIA is used
    * - ``base_directory``
      - path
      - ``~/fantasia_runs/``
@@ -73,13 +74,19 @@ Global, service and execution parameters
    * - ``delete_queues``
      - boolean
      - ``true``
-     - Delete all queues on the broker at startup; runs sharing a broker
-       interfere (see RabbitMQ deployment notes)
+     - Delete stale queues at startup; with protein-information-system 3.1.x
+       this deletes every queue on the broker (see RabbitMQ deployment notes)
+   * - ``fail_on_task_errors``
+     - boolean
+     - ``true``
+     - Exit with status 1 when tasks failed and were discarded or a worker
+       process crashed; needs protein-information-system 3.2 or later (ignored
+       by 3.1.x)
    * - ``embeddings_url``
      - URL/path/unset
-     - final-layer Zenodo dump
-     - Reference dump used by ``initialize``; ``file://`` URLs and local paths
-       are used in place without copying
+     - unset
+     - Reference dump used by ``initialize``, which resets the database first;
+       ``file://`` URLs and local paths are used in place without copying
 
 Embedding parameters
 --------------------
