@@ -58,9 +58,6 @@ export PIP_CACHE_DIR="$PIP_CACHE"
 STORE="${STORE:-$PWD}"
 PROJECT_DIR="$STORE/FANTASIA"
 EXECUTION_DIR="$STORE/fantasia"
-SHARED_MEM_DIR="/tmp/fantasia"
-POSTGRESQL_DATA="$SHARED_MEM_DIR/data"
-POSTGRESQL_SOCKET="$SHARED_MEM_DIR/socket"
 RABBITMQ_DATA_DIR="$HOME/fantasia_rabbitmq"
 CONFIG_FILE="$PROJECT_DIR/fantasia/config.yaml"
 
@@ -105,6 +102,38 @@ if [ ! -f "$FANTASIA_IMAGE" ]; then
     apptainer build --disable-cache "$FANTASIA_IMAGE" docker://cbbio/fantasia:v4.1.2
 fi
 
+# =======================
+# Service helpers
+# =======================
+# Wait until a TCP port on this node accepts connections, or fail after a timeout.
+wait_for_port() {  # wait_for_port <name> <port> <timeout_seconds>
+    local name=$1 port=$2 timeout=$3 waited=0
+    until (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; do
+        if (( waited >= timeout )); then
+            echo "❌ $name is not accepting connections on port $port after ${timeout}s"
+            return 1
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo "✅ $name is ready (port $port)"
+}
+
+# Send SIGTERM to a background process, wait up to 30 s, then SIGKILL it.
+stop_process() {  # stop_process <name> <pid>
+    local name=$1 pid=$2
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    echo "🛑 Stopping $name..."
+    kill "$pid"
+    for _ in $(seq 30); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 1
+    done
+    kill -9 "$pid" 2>/dev/null
+}
+
 # Registered before starting services so they are stopped on any exit,
 # including an early exit when fantasia initialize fails.
 # =======================
@@ -112,22 +141,8 @@ fi
 # =======================
 cleanup() {
     echo "🧹 Cleaning up background services..."
-
-    if [[ -n "$PG_PID" ]] && kill -0 "$PG_PID" 2>/dev/null; then
-        echo "🛑 Stopping PostgreSQL..."
-        kill "$PG_PID"
-    fi
-
-    if [[ -n "$RABBITMQ_PID" ]] && kill -0 "$RABBITMQ_PID" 2>/dev/null; then
-        echo "🛑 Stopping RabbitMQ..."
-        kill "$RABBITMQ_PID"
-    fi
-    wait 2>/dev/null
-
-    if [[ -d "$SHARED_MEM_DIR" ]]; then
-        echo "🗑️ Removing shared memory directory: $SHARED_MEM_DIR"
-        rm -rf "$SHARED_MEM_DIR"
-    fi
+    stop_process PostgreSQL "$PG_PID"
+    stop_process RabbitMQ "$RABBITMQ_PID"
 }
 
 trap cleanup EXIT
@@ -171,7 +186,8 @@ RABBITMQ_PID=$!
 # Wait for services to become available
 # =======================
 echo "⏳ Waiting for services to initialize..."
-sleep 15
+wait_for_port PostgreSQL "$PG_PORT" 600 || exit 1
+wait_for_port RabbitMQ 5672 300 || exit 1
 
 # =======================
 # Run FANTASIA pipeline
