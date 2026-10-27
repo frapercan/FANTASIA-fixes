@@ -15,3 +15,7 @@ or, from the bundle:
     git fetch /path/to/pis-fix-surface-task-failures.bundle fix/surface-task-failures:fix/surface-task-failures
 
 `PR_DESCRIPTION.md` contains the pull request description.
+
+`FANTASIA_PR_DESCRIPTION.md` is the description for the companion FANTASIA pull
+request (branch `fix/open-issues-4.1.2` of this fork), kept here until that
+pull request is opened.
