@@ -12,6 +12,7 @@ import parasail
 import requests
 from ete3 import NCBITaxa
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 from tqdm import tqdm
 
 __all__ = [
@@ -33,6 +34,24 @@ __all__ = [
 def _get_logger(logger: Optional[logging.Logger] = None) -> logging.Logger:
     """Return the provided logger or a module-scoped default."""
     return logger if logger is not None else logging.getLogger(__name__)
+
+
+def _db_url(db_config: Mapping[str, Any]) -> URL:
+    """
+    Build the SQLAlchemy URL for the reference database.
+
+    Uses psycopg2, the driver shipped with protein-information-system: a bare
+    ``postgresql://`` URL selects psycopg (v3) since SQLAlchemy 2.1. ``URL.create``
+    also escapes credentials containing characters such as ``@`` or ``/``.
+    """
+    return URL.create(
+        drivername="postgresql+psycopg2",
+        username=str(db_config["DB_USERNAME"]),
+        password=str(db_config["DB_PASSWORD"]),
+        host=str(db_config["DB_HOST"]),
+        port=int(db_config["DB_PORT"]),
+        database=str(db_config["DB_NAME"]),
+    )
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -122,11 +141,15 @@ def download_embeddings(
 
     log.info("Downloading embeddings from %s → %s", url, dest)
 
+    # Download to a temporary name and rename on success, so an interrupted or
+    # concurrent download never leaves a truncated file at ``dest`` that a later
+    # run would take as complete.
+    partial = dest.with_name(f"{dest.name}.{os.getpid()}.part")
     with requests.get(url, stream=True, timeout=timeout) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("content-length", 0)) or None
 
-        with open(dest, "wb") as fh, tqdm(
+        with open(partial, "wb") as fh, tqdm(
                 total=total,
                 unit="B",
                 unit_scale=True,
@@ -140,6 +163,12 @@ def download_embeddings(
                 fh.write(chunk)
                 if total:
                     bar.update(len(chunk))
+
+    size = partial.stat().st_size
+    if total is not None and size != total:
+        partial.unlink()
+        raise OSError(f"Incomplete download of {url}: {size} of {total} bytes")
+    os.replace(partial, dest)
 
     log.info("Embeddings downloaded successfully: %s", dest)
     return dest
@@ -191,10 +220,7 @@ def load_dump_to_db(
         log.error("Missing DB config keys: %s", ", ".join(sorted(missing)))
         return False
 
-    url = (
-        f"postgresql+psycopg2://{db_config['DB_USERNAME']}:{db_config['DB_PASSWORD']}"
-        f"@{db_config['DB_HOST']}:{db_config['DB_PORT']}/{db_config['DB_NAME']}"
-    )
+    url = _db_url(db_config)
 
     if drop_and_init:
         log.info("Resetting schema and ensuring extensions…")
@@ -267,15 +293,11 @@ def _pg_restore_errors(stderr: str) -> List[str]:
 
 def _is_ignorable_restore_error(message: str) -> bool:
     """Return True for errors caused only by unknown session settings."""
-    if "errors ignored on restore" in message:
-        return True
     return "unrecognized configuration parameter" in message and any(
         f'"{name}"' in message for name in _IGNORABLE_RESTORE_SETTINGS
     )
 
 
-# psycopg2 is the driver shipped with protein-information-system. A bare
-# "postgresql://" URL selects psycopg (v3) by default since SQLAlchemy 2.1.
 def reference_has_embeddings(db_config: Mapping[str, Any]) -> bool:
     """
     Return True if the reference database holds at least one embedding.
@@ -283,11 +305,7 @@ def reference_has_embeddings(db_config: Mapping[str, Any]) -> bool:
     A missing ``sequence_embeddings`` table (database never initialized) counts
     as empty.
     """
-    url = (
-        f"postgresql+psycopg2://{db_config['DB_USERNAME']}:{db_config['DB_PASSWORD']}"
-        f"@{db_config['DB_HOST']}:{db_config['DB_PORT']}/{db_config['DB_NAME']}"
-    )
-    engine = create_engine(url, pool_pre_ping=True)
+    engine = create_engine(_db_url(db_config), pool_pre_ping=True)
     try:
         with engine.connect() as conn:
             if conn.execute(text("SELECT to_regclass('public.sequence_embeddings')")).scalar() is None:
@@ -349,10 +367,10 @@ def _empty_alignment_metrics(len1: int, len2: int) -> Dict[str, Optional[float]]
 
     Parasail rejects empty inputs, so the alignment is skipped. Metrics are
     reported as missing (None) rather than 0.0 so that they cannot be mistaken
-    for a real alignment with no identity.
+    for a real alignment with no identity. Callers report the number of skipped
+    pairs once; this logs each pair at DEBUG level only.
     """
-    logger = logging.getLogger(__name__)
-    logger.warning("Empty sequence (lengths %d / %d); alignment skipped.", len1, len2)
+    logging.getLogger(__name__).debug("Empty sequence (lengths %d / %d); alignment skipped.", len1, len2)
     return {
         "identity_count": None,
         "alignment_length": None,

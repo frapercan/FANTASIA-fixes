@@ -258,7 +258,7 @@ def run_pipeline(conf):
         For any other unexpected runtime errors.
     """
 
-    logger = logging.getLogger("fantasia")
+    logger = logging.getLogger("FANTASIA")
     try:
         current_date = datetime.now().strftime("%Y%m%d%H%M%S")
         conf = setup_experiment_directories(conf, current_date)
@@ -345,7 +345,7 @@ def setup_experiment_directories(conf, timestamp):
         If the experiment directory or configuration file cannot be created.
     """
 
-    logger = logging.getLogger("fantasia")
+    logger = logging.getLogger("FANTASIA")
     base_directory = os.path.expanduser(conf.get("base_directory", "~/fantasia/"))
     experiments_dir = os.path.join(base_directory, "experiments")
     os.makedirs(experiments_dir, exist_ok=True)
@@ -375,14 +375,21 @@ def setup_experiment_directories(conf, timestamp):
 
 
 BUNDLED_CONSTANTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constants.yaml")
+# Value used by the packaged configs; it only resolves from the repository root.
+PACKAGED_CONSTANTS_SETTING = os.path.normpath("./fantasia/constants.yaml")
 
 
 def resolve_constants_path(path):
-    """Return ``path`` if it exists, otherwise the constants.yaml bundled with FANTASIA."""
+    """
+    Return the constants file to use.
+
+    ``path`` is used when it exists. Otherwise the constants.yaml bundled with
+    FANTASIA is used, with a warning unless ``path`` is the packaged default.
+    """
     if path and os.path.isfile(os.path.expanduser(path)):
         return os.path.expanduser(path)
-    if path and path not in ("./fantasia/constants.yaml", "fantasia/constants.yaml"):
-        logging.getLogger("fantasia").warning(
+    if path and os.path.normpath(path) != PACKAGED_CONSTANTS_SETTING:
+        logging.getLogger("FANTASIA").warning(
             "Constants file %s not found; using the bundled %s.", path, BUNDLED_CONSTANTS_PATH
         )
     return BUNDLED_CONSTANTS_PATH

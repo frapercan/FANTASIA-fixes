@@ -303,7 +303,6 @@ class EmbeddingLookUp(GPUTaskInitializer):
         self.load_model_definitions()
         self.logger.info("Loaded %d model definitions from DB+config: %s",
                          len(self.types or {}), list(self.types.keys()) if self.types else [])
-        self._ensure_reference_embeddings()
         self.logger.info("Preloading GO annotations from the database...")
         self.preload_annotations()
         self.logger.info("GO annotations cached: %d sequences with annotations.",
@@ -482,20 +481,6 @@ class EmbeddingLookUp(GPUTaskInitializer):
         except Exception as e:
             self.logger.error("Unexpected error during enqueue: %s", e, exc_info=True)
             raise
-
-    def _ensure_reference_embeddings(self) -> None:
-        """Fail fast when the reference database holds no embeddings.
-
-        An empty database (failed restore or skipped ``fantasia initialize``) used to
-        make every batch log "Empty lookup ... Skipping batch" and the run finish
-        without results while reporting success.
-        """
-        if self.session.query(SequenceEmbedding.id).first() is None:
-            raise RuntimeError(
-                "The reference database contains no embeddings. Run 'fantasia initialize' "
-                "with a valid embeddings_url and check that the dump was restored "
-                "(see the initialize log for pg_restore errors)."
-            )
 
     def load_model_definitions(self):
         """Initialize `self.types` by matching DB embedding types with configuration.
@@ -1032,6 +1017,12 @@ class EmbeddingLookUp(GPUTaskInitializer):
                 if pairs:
                     with ProcessPoolExecutor(max_workers=store_workers) as ex:
                         metrics_list = list(ex.map(compute_metrics, pairs))
+                skipped = sum(1 for m in metrics_list if m.get("identity") is None)
+                if skipped:
+                    self.logger.warning(
+                        "Alignment metrics skipped for %d pair(s) with an empty sequence; "
+                        "their identity/similarity columns are left empty.", skipped
+                    )
                 if metrics_list:
                     met = pl.DataFrame(metrics_list)
                     merge_cols = ["sequence_query", "sequence_reference"]
@@ -1655,7 +1646,7 @@ class EmbeddingLookUp(GPUTaskInitializer):
                 df.group_by(["accession", "go_id"])
                 .agg([
                     pl.len().alias("term_count"),
-                    pl.col("protein_id").cast(pl.Utf8, strict=False).unique().alias("proteins_list"),
+                    pl.col("protein_id").cast(pl.Utf8, strict=False).unique(maintain_order=True).alias("proteins_list"),
                 ])
             )
 

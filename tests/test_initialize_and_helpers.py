@@ -7,10 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-parasail = pytest.importorskip("parasail")
-
-from fantasia.src.helpers import helpers  # noqa: E402
-from fantasia.src.helpers.parser import DEFAULT_CONFIG_PATH  # noqa: E402
+from fantasia.src.helpers import helpers
+from fantasia.src.helpers.parser import DEFAULT_CONFIG_PATH, build_parser
 
 DB_CONF = {
     "DB_USERNAME": "usuario",
@@ -71,6 +69,53 @@ def test_download_embeddings_uses_local_file_in_place(tmp_path, monkeypatch):
     assert not (tmp_path / "embeddings").exists()
 
 
+class _FakeResponse:
+    def __init__(self, chunks, content_length):
+        self._chunks = chunks
+        self.headers = {"content-length": str(content_length)}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size):
+        return iter(self._chunks)
+
+
+def test_download_is_atomic(tmp_path, monkeypatch):
+    monkeypatch.setattr(helpers.requests, "get", lambda *a, **k: _FakeResponse([b"PG", b"DMP"], 5))
+    dest = tmp_path / "ref.backup"
+
+    assert helpers.download_embeddings("https://example.org/ref.backup", dest) == dest
+
+    assert dest.read_bytes() == b"PGDMP"
+    assert list(tmp_path.iterdir()) == [dest]
+
+
+def test_truncated_download_leaves_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(helpers.requests, "get", lambda *a, **k: _FakeResponse([b"PG"], 5))
+    dest = tmp_path / "ref.backup"
+
+    with pytest.raises(OSError, match="Incomplete download"):
+        helpers.download_embeddings("https://example.org/ref.backup", dest)
+
+    # Nothing a later run could mistake for a complete dump.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_db_url_escapes_credentials():
+    url = helpers._db_url({**DB_CONF, "DB_PASSWORD": "p@ss/w:rd"})
+    assert url.drivername == "postgresql+psycopg2"
+    assert url.password == "p@ss/w:rd"
+    assert url.host == "localhost"
+    assert "p%40ss%2Fw%3Ard" in url.render_as_string(hide_password=False)
+
+
 def test_download_embeddings_missing_local_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         helpers.download_embeddings((tmp_path / "missing.backup").as_uri(), tmp_path / "out.backup")
@@ -129,11 +174,24 @@ def test_load_dump_fails_on_other_errors(tmp_path, monkeypatch):
 # #46: resources resolved independently of the working directory
 # ---------------------------------------------------------------------------
 
-def test_default_config_is_bundled_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize("command", ["initialize", "run"])
+def test_default_config_is_bundled_config(tmp_path, monkeypatch, command):
     monkeypatch.chdir(tmp_path)
-    assert Path(DEFAULT_CONFIG_PATH).is_file()
-    assert Path(DEFAULT_CONFIG_PATH).name == "config.yaml"
-    assert Path(DEFAULT_CONFIG_PATH).parent.name == "fantasia"
+    args, _ = build_parser().parse_known_args([command])
+    assert args.config == DEFAULT_CONFIG_PATH
+    assert Path(args.config).is_file()
+    assert Path(args.config).parent.name == "fantasia"
+
+
+def test_go_obo_is_resolved_from_installation(tmp_path, monkeypatch):
+    lookup = pytest.importorskip("fantasia.src.lookup")  # needs torch
+    monkeypatch.chdir(tmp_path)
+    assert Path(lookup._resolve_go_obo_path({"base_directory": str(tmp_path)})) == lookup.BUNDLED_GO_OBO
+
+    monkeypatch.setattr(lookup, "BUNDLED_GO_OBO", tmp_path / "missing.obo")
+    assert lookup._resolve_go_obo_path({"base_directory": str(tmp_path / "base")}) == str(
+        tmp_path / "base" / "go-basic.obo"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +268,12 @@ def test_cli_initialize_exits_non_zero_on_failure(monkeypatch, tmp_path):
 
 
 def test_postgres_client_encoding_defaults_to_utf8(monkeypatch):
-    monkeypatch.delenv("PGCLIENTENCODING", raising=False)
-    _load_main(monkeypatch, load_dump_result=True, download_calls=[])
     import os
+    # setenv first so monkeypatch restores the original state, even if the
+    # variable was absent, after main sets it on import.
+    monkeypatch.setenv("PGCLIENTENCODING", "placeholder")
+    monkeypatch.delenv("PGCLIENTENCODING")
+    _load_main(monkeypatch, load_dump_result=True, download_calls=[])
     assert os.environ["PGCLIENTENCODING"] == "UTF8"
 
 
