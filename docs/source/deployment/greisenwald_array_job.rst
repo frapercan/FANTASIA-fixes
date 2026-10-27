@@ -90,9 +90,9 @@ Paths and image definitions:
     RABBIT_DIR="$HOME/fantasia_rabbitmq_\${SLURM_ARRAY_TASK_ID}"
     FANTASIA_RUN_DIR="$HOME/fantasia_\${SLURM_ARRAY_TASK_ID}"
 
-    PGVECTOR_SIF="$WORK_DIR/pgvector.sif"
+    PGVECTOR_SIF="$WORK_DIR/pgvector_pg18.sif"
     RABBITMQ_SIF="$WORK_DIR/rabbitmq.sif"
-    FANTASIA_SIF="$WORK_DIR/fantasia.sif"
+    FANTASIA_SIF="$WORK_DIR/fantasia_v4.1.2.sif"
 
 If missing, containers are built from Docker images.
 

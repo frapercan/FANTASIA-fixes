@@ -4,7 +4,7 @@
 
 # FANTASIA
 
-Current release: **4.1.1**
+Current release: **4.1.2**
 
 **Functional ANnoTAtion based on embedding space SImilArity**
 

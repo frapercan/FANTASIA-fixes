@@ -117,6 +117,8 @@ Services are launched in the background:
      --env POSTGRES_USER=usuario \
      --env POSTGRES_PASSWORD=clave \
      --env POSTGRES_DB=BioData \
+     --env PGDATA=/var/lib/postgresql/data \
+     --env POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale=C.UTF-8" \
      --bind $PGDATA_HOST:/var/lib/postgresql/data \
      --bind $PG_RUN:/var/run/postgresql \
      $PGVECTOR_IMAGE

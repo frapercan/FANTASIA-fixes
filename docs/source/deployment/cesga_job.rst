@@ -84,7 +84,7 @@ Images are built automatically if missing:
 
 .. code-block:: bash
 
-   apptainer build fantasia.sif docker://cbbio/fantasia:v4.1.1
+   apptainer build fantasia.sif docker://cbbio/fantasia:v4.1.2
 
 Execution Phase
 ---------------

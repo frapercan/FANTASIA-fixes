@@ -30,9 +30,9 @@ RABBIT_DIR="$HOME/fantasia_rabbitmq"
 FANTASIA_RUN_DIR="$HOME/fantasia"
 CONFIG_PATH="$REPO_DIR/fantasia/config.yaml"
 
-PGVECTOR_SIF="$WORK_DIR/pgvector.sif"
+PGVECTOR_SIF="$WORK_DIR/pgvector_pg18.sif"
 RABBITMQ_SIF="$WORK_DIR/rabbitmq.sif"
-FANTASIA_SIF="$WORK_DIR/fantasia.sif"
+FANTASIA_SIF="$WORK_DIR/fantasia_v4.1.2.sif"
 
 DB_NAME="BioData"
 PG_PORT=5432
@@ -57,7 +57,7 @@ cd "$REPO_DIR" || exit 1
 # =======================
 if [ ! -f "$PGVECTOR_SIF" ]; then
     echo "🔨 Building pgvector.sif..."
-    singularity build "$PGVECTOR_SIF" docker://pgvector/pgvector:pg16
+    singularity build "$PGVECTOR_SIF" docker://pgvector/pgvector:0.8.1-pg18
 fi
 
 if [ ! -f "$RABBITMQ_SIF" ]; then
@@ -67,7 +67,7 @@ fi
 
 if [ ! -f "$FANTASIA_SIF" ]; then
     echo "🔨 Building fantasia.sif..."
-    singularity build --disable-cache "$FANTASIA_SIF" docker://cbbio/fantasia:v4.1.1
+    singularity build --disable-cache "$FANTASIA_SIF" docker://cbbio/fantasia:v4.1.2
 fi
 
 # =======================
@@ -78,7 +78,7 @@ echo "🚀 Starting PostgreSQL..."
 rm -rf "$DB_SOCKET" "$DB_DIR"
 mkdir -p "$DB_SOCKET" "$DB_DIR"
 
-singularity exec "$PGVECTOR_SIF" initdb -D "$DB_DIR"
+singularity exec "$PGVECTOR_SIF" initdb -D "$DB_DIR" --encoding=UTF8 --locale=C.UTF-8
 
 cat <<EOF > "$DB_DIR/postgresql.conf"
 port = $PG_PORT
@@ -139,7 +139,8 @@ ls -l "$REPO_DIR/fantasia/"
 
 # Initialize the information system
 singularity exec --nv --bind "$FANTASIA_RUN_DIR:/fantasia" "$FANTASIA_SIF" \
-    fantasia initialize --config "$CONFIG_PATH" --base_directory /fantasia
+    fantasia initialize --config "$CONFIG_PATH" --base_directory /fantasia \
+    || { echo "❌ fantasia initialize failed"; exit 1; }
 
 # Run analysis
 singularity exec --nv --bind "$FANTASIA_RUN_DIR:/fantasia" "$FANTASIA_SIF" \

@@ -73,11 +73,13 @@ Global, service and execution parameters
    * - ``delete_queues``
      - boolean
      - ``true``
-     - Remove stale queues between runs
+     - Delete all queues on the broker at startup; runs sharing a broker
+       interfere (see RabbitMQ deployment notes)
    * - ``embeddings_url``
-     - URL/unset
-     - unset
-     - Reference dump used by ``initialize``
+     - URL/path/unset
+     - final-layer Zenodo dump
+     - Reference dump used by ``initialize``; ``file://`` URLs and local paths
+       are used in place without copying
 
 Embedding parameters
 --------------------

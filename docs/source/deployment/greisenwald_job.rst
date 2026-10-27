@@ -73,9 +73,9 @@ If containers are missing, they are built with:
 
 .. code-block:: bash
 
-   singularity build pgvector.sif docker://pgvector/pgvector:pg16
+   singularity build pgvector.sif docker://pgvector/pgvector:0.8.1-pg18
    singularity build rabbitmq.sif docker://rabbitmq:management
-   singularity build --disable-cache fantasia.sif docker://cbbio/fantasia:v4.1.1
+   singularity build --disable-cache fantasia.sif docker://cbbio/fantasia:v4.1.2
 
 PostgreSQL Configuration
 ------------------------
@@ -84,7 +84,7 @@ A shared memory directory is prepared and PostgreSQL is started with:
 
 .. code-block:: bash
 
-   singularity exec "$PGVECTOR_SIF" initdb -D "$DB_DIR"
+   singularity exec "$PGVECTOR_SIF" initdb -D "$DB_DIR" --encoding=UTF8 --locale=C.UTF-8
    singularity exec "$PGVECTOR_SIF" postgres -D "$DB_DIR" ...
 
 User and database are created manually via `psql` calls.

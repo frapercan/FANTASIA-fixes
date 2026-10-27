@@ -65,9 +65,9 @@ RABBITMQ_DATA_DIR="$HOME/fantasia_rabbitmq"
 CONFIG_FILE="$PROJECT_DIR/fantasia/config.yaml"
 
 # Apptainer container images
-PGVECTOR_IMAGE="$PROJECT_DIR/pgvector.sif"
+PGVECTOR_IMAGE="$PROJECT_DIR/pgvector_pg18.sif"
 RABBITMQ_IMAGE="$PROJECT_DIR/rabbitmq.sif"
-FANTASIA_IMAGE="$PROJECT_DIR/fantasia.sif"
+FANTASIA_IMAGE="$PROJECT_DIR/fantasia_v4.1.2.sif"
 
 DB_NAME="BioData"
 PG_PORT=5432
@@ -92,7 +92,7 @@ cd "$PROJECT_DIR" || exit 1
 # =======================
 if [ ! -f "$PGVECTOR_IMAGE" ]; then
     echo "🔨 Building pgvector container..."
-    apptainer build "$PGVECTOR_IMAGE" docker://pgvector/pgvector:pg16
+    apptainer build "$PGVECTOR_IMAGE" docker://pgvector/pgvector:0.8.1-pg18
 fi
 
 if [ ! -f "$RABBITMQ_IMAGE" ]; then
@@ -102,7 +102,7 @@ fi
 
 if [ ! -f "$FANTASIA_IMAGE" ]; then
     echo "🔨 Building FANTASIA container..."
-    apptainer build --disable-cache "$FANTASIA_IMAGE" docker://cbbio/fantasia:v4.1.1
+    apptainer build --disable-cache "$FANTASIA_IMAGE" docker://cbbio/fantasia:v4.1.2
 fi
 
 # =======================
@@ -120,6 +120,8 @@ nohup apptainer run \
   --env POSTGRES_USER=usuario \
   --env POSTGRES_PASSWORD=clave \
   --env POSTGRES_DB="$DB_NAME" \
+  --env PGDATA=/var/lib/postgresql/data \
+  --env POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale=C.UTF-8" \
   --bind "$PGDATA_HOST:/var/lib/postgresql/data" \
   --bind "$PG_RUN:/var/run/postgresql" \
   "$PGVECTOR_IMAGE" > postgres.log 2>&1 &
@@ -157,7 +159,8 @@ echo "📂 Listing FANTASIA contents:"
 ls -l "$PROJECT_DIR/fantasia/"
 
 apptainer exec --nv --bind "$EXECUTION_DIR:/fantasia" "$FANTASIA_IMAGE" \
-    fantasia initialize --config "$CONFIG_FILE" --base_directory /fantasia
+    fantasia initialize --config "$CONFIG_FILE" --base_directory /fantasia \
+    || { echo "❌ fantasia initialize failed"; exit 1; }
 
 apptainer exec --nv --bind "$EXECUTION_DIR:/fantasia" "$FANTASIA_IMAGE" \
     fantasia run --config "$CONFIG_FILE" --base_directory /fantasia
