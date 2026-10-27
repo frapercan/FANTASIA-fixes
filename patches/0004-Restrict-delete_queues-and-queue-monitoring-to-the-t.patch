@@ -1,33 +1,37 @@
-From 725f8c03d008b4aa4746eb351939a587607e1806 Mon Sep 17 00:00:00 2001
+From 22f332d455b5032c29a30826f4ba2f2f3525c584 Mon Sep 17 00:00:00 2001
 From: frapercan <frapercan1@alum.us.es>
 Date: Tue, 27 Oct 2026 15:51:30 +0000
-Subject: [PATCH 4/6] Delete only the task's own queues when delete_queues is
- enabled
+Subject: [PATCH 4/6] Restrict delete_queues and queue monitoring to the task's
+ own queues
 
 delete_queues called delete_all_queues(), which removes every queue on the
 broker through the HTTP API, including those of other tasks, applications
-and users, along with their pending messages. Two FANTASIA users sharing
-a RabbitMQ server wiped each other's work.
+and users, along with their pending messages. Two FANTASIA users sharing a
+RabbitMQ server wiped each other's work.
 
 Add delete_task_queues(), which deletes only this task's computing and
 inserting queues and its per-model computing queues (<computing_queue>_*)
 in the connection's vhost, and use it for delete_queues.
 delete_all_queues() is kept unchanged for callers that rely on it.
 
-Verified against RabbitMQ: a foreign queue with a pending message survives
-a FANTASIA run with delete_queues: true, while the task's own queues are
+monitor_queues() used a substring match, so a task whose queue name
+contained another task's name waited on that task's queues. It now uses the
+same filter.
+
+Verified against RabbitMQ: a foreign queue with a pending message survives a
+FANTASIA run with delete_queues: true, while the task's own queues are
 reset.
 ---
  protein_information_system/config/config.yaml |  3 +-
- protein_information_system/tasks/queue.py     | 39 +++++++++++++++++--
- tests/tasks/test_queue_task_initializer.py    | 32 +++++++++++++++
- 3 files changed, 70 insertions(+), 4 deletions(-)
+ protein_information_system/tasks/queue.py     | 49 ++++++++++++++++---
+ tests/tasks/test_queue_task_initializer.py    | 47 ++++++++++++++++++
+ 3 files changed, 90 insertions(+), 9 deletions(-)
 
 diff --git a/protein_information_system/config/config.yaml b/protein_information_system/config/config.yaml
-index 15c3948..f661420 100644
+index 1899ef7..202889e 100644
 --- a/protein_information_system/config/config.yaml
 +++ b/protein_information_system/config/config.yaml
-@@ -45,7 +45,8 @@ rabbitmq_password: guest     # RabbitMQ password for authentication.
+@@ -49,7 +49,8 @@ rabbitmq_password: guest     # RabbitMQ password for authentication.
  # Maximum number of items to process (for debugging).
  limit_execution: 0 # False for complete run.
  
@@ -36,12 +40,12 @@ index 15c3948..f661420 100644
 +# queues are removed; other queues on the broker are left untouched.
  delete_queues: True
  
- # Fail the pipeline (raise TaskFailuresError) when tasks failed and were discarded.
+ # Raise TaskFailuresError at the end of a stage when tasks failed and were
 diff --git a/protein_information_system/tasks/queue.py b/protein_information_system/tasks/queue.py
-index b4b16e9..13675bd 100644
+index 825e744..e26ea9d 100644
 --- a/protein_information_system/tasks/queue.py
 +++ b/protein_information_system/tasks/queue.py
-@@ -66,7 +66,7 @@ class QueueTaskInitializer(BaseTaskInitializer):
+@@ -69,7 +69,7 @@ class QueueTaskInitializer(BaseTaskInitializer):
          )
          self.logger.info("QueueTaskInitializer has been successfully initialized.")
          if self.conf.get('delete_queues', False):
@@ -50,7 +54,20 @@ index b4b16e9..13675bd 100644
  
          self.connection = self.create_rabbitmq_connection()
          self.channel = self.connection.channel()
-@@ -444,22 +444,55 @@ class QueueTaskInitializer(BaseTaskInitializer):
+@@ -331,11 +331,7 @@ class QueueTaskInitializer(BaseTaskInitializer):
+                     self.logger.warning("No queues found from RabbitMQ API.")
+                     continue
+ 
+-                # Filtrar colas relevantes por patrones
+-                relevant_queues = [
+-                    queue for queue in all_queues
+-                    if self.computing_queue in queue['name'] or self.inserting_queue in queue['name']
+-                ]
++                relevant_queues = self._task_queues(all_queues)
+ 
+                 if not relevant_queues:
+                     self.logger.info("No relevant queues found. Stopping monitoring.")
+@@ -491,22 +487,59 @@ class QueueTaskInitializer(BaseTaskInitializer):
              self.logger.error(f"Failed to fetch queues from RabbitMQ API: {e}")
              return []
  
@@ -63,6 +80,15 @@ index b4b16e9..13675bd 100644
 +            return True
 +        return queue_name.startswith(f"{self.computing_queue}_")
 +
++    def _task_queues(self, queues):
++        """Filter queue dicts from the RabbitMQ API to this task's queues in the connection's vhost."""
++        params = getattr(self, 'connection_params', None)
++        vhost = params.virtual_host if params is not None else '/'
++        return [
++            q for q in queues
++            if self.is_task_queue(q['name']) and q.get('vhost', '/') == vhost
++        ]
++
 +    def delete_task_queues(self):
 +        """
 +        Delete this task's queues (see :meth:`is_task_queue`) through the RabbitMQ HTTP API.
@@ -70,12 +96,7 @@ index b4b16e9..13675bd 100644
 +        Used when ``delete_queues`` is enabled. Queues of other tasks, applications or
 +        users on the same broker are left untouched.
 +        """
-+        params = getattr(self, 'connection_params', None)
-+        vhost = params.virtual_host if params is not None else '/'
-+        queues = [
-+            q for q in self._get_all_queues_from_api()
-+            if self.is_task_queue(q['name']) and q.get('vhost', '/') == vhost
-+        ]
++        queues = self._task_queues(self._get_all_queues_from_api())
 +        if not queues:
 +            self.logger.info("No queues of this task to delete.")
 +            return
@@ -109,10 +130,10 @@ index b4b16e9..13675bd 100644
          rabbitmq_port_http = self.conf.get('rabbitmq_port_http', 15672)
          url_base = f"http://{self.conf['rabbitmq_host']}:{rabbitmq_port_http}/api/queues"
 diff --git a/tests/tasks/test_queue_task_initializer.py b/tests/tasks/test_queue_task_initializer.py
-index 2bccafa..4d1f362 100644
+index 5f082e4..1dceda9 100644
 --- a/tests/tasks/test_queue_task_initializer.py
 +++ b/tests/tasks/test_queue_task_initializer.py
-@@ -221,3 +221,35 @@ def test_failure_counter_is_shared_with_worker_processes():
+@@ -313,3 +313,50 @@ def test_failure_counter_is_shared_with_worker_processes():
      for p in procs:
          p.join()
      assert task.failed_tasks.value == 3
@@ -148,6 +169,21 @@ index 2bccafa..4d1f362 100644
 +
 +    assert sorted(u.rsplit("/", 1)[1] for u in deleted) == sorted(own)
 +    assert all("/%2F/" in u for u in deleted)
++
++
++def test_monitor_only_watches_own_queues():
++    task = make_task()
++    task.monitor_interval = 0
++    # Another task whose queue name contains ours as a substring keeps messages forever.
++    task._get_all_queues_from_api = lambda: [
++        {"name": task.computing_queue, "vhost": "/", "messages_ready": 0, "messages_unacknowledged": 0},
++        {"name": f"{task.computing_queue}_ESM", "vhost": "/", "messages_ready": 0, "messages_unacknowledged": 0},
++        {"name": f"my{task.computing_queue}", "vhost": "/", "messages_ready": 3, "messages_unacknowledged": 0},
++    ]
++
++    task.monitor_queues()  # returns once our own queues are empty
++
++    assert task.stop_event.is_set()
 -- 
 2.43.0
 

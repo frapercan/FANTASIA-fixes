@@ -1,4 +1,4 @@
-From 47098f1cb162ef2b53c39bc82906fd0fbbe14238 Mon Sep 17 00:00:00 2001
+From eeeee15d67b966dd29199eb0d2f4fc2eb938e74b Mon Sep 17 00:00:00 2001
 From: frapercan <frapercan1@alum.us.es>
 Date: Tue, 27 Oct 2026 15:52:22 +0000
 Subject: [PATCH 5/6] Use UTF-8 client encoding for database connections

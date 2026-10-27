@@ -1,4 +1,4 @@
-From 2bcf9e994ceb069737ab3fe777f6f9926bb09a0a Mon Sep 17 00:00:00 2001
+From 7f2d96e64358882ce5afc0d4d04640eb130037e5 Mon Sep 17 00:00:00 2001
 From: frapercan <frapercan1@alum.us.es>
 Date: Tue, 27 Oct 2026 15:32:52 +0000
 Subject: [PATCH 2/6] Retry failed computing tasks once instead of requeueing
@@ -10,19 +10,37 @@ GPUTaskInitializer, which fetches with basic_get until the queue is empty,
 the requeued message is fetched again immediately, so the pipeline never
 finishes.
 
-Requeue a failed message once; if it fails again (redelivered), discard it
-with requeue=False. Verified against RabbitMQ: a permanently failing task is
-now attempted twice and removed, instead of looping.
+Requeue a failed message once, after task_retry_delay seconds (default 5,
+so that a brief outage of a remote service can recover). If it fails again
+(redelivered), discard it with requeue=False. Verified against RabbitMQ: a
+permanently failing task is now attempted twice and removed, instead of
+looping.
 ---
- protein_information_system/tasks/queue.py  | 22 ++++++--
- tests/tasks/test_queue_task_initializer.py | 63 ++++++++++++++++++++++
- 2 files changed, 80 insertions(+), 5 deletions(-)
+ protein_information_system/config/config.yaml |  4 +
+ protein_information_system/tasks/queue.py     | 26 ++++--
+ tests/tasks/test_queue_task_initializer.py    | 82 ++++++++++++++++++-
+ 3 files changed, 106 insertions(+), 6 deletions(-)
 
+diff --git a/protein_information_system/config/config.yaml b/protein_information_system/config/config.yaml
+index e41aeb3..51153f3 100644
+--- a/protein_information_system/config/config.yaml
++++ b/protein_information_system/config/config.yaml
+@@ -11,6 +11,10 @@ binaries_path: '../binaries'
+ # Monitoring interval in seconds (for processes that require periodic checks).
+ monitor_interval: 10 # ⚠️ IMPORTANT: Low values as 1 can cause execution problems.
+ 
++# Seconds to wait before retrying a failed task once. A task that fails again is
++# discarded.
++task_retry_delay: 5
++
+ # Path to save logs, set False to disable the option
+ log_path: '~/data/logs'
+ 
 diff --git a/protein_information_system/tasks/queue.py b/protein_information_system/tasks/queue.py
-index 7a230b8..67adc01 100644
+index 573b5f1..6407f16 100644
 --- a/protein_information_system/tasks/queue.py
 +++ b/protein_information_system/tasks/queue.py
-@@ -346,11 +346,23 @@ class QueueTaskInitializer(BaseTaskInitializer):
+@@ -347,11 +347,27 @@ class QueueTaskInitializer(BaseTaskInitializer):
              )
              ch.basic_ack(delivery_tag=method.delivery_tag)
          except Exception as e:
@@ -31,10 +49,11 @@ index 7a230b8..67adc01 100644
 -                exc_info=True
 -            )
 -            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-+            # Retry once. A message that fails again is discarded: requeueing it
-+            # forever loops on permanent errors (with basic_get it is fetched again
-+            # immediately). A message redelivered after a consumer crash also counts
-+            # as a retry.
++            # Retry once, after task_retry_delay seconds so that a brief outage of a
++            # remote service can recover. A message that fails again is discarded:
++            # requeueing it forever loops on permanent errors (with basic_get it is
++            # fetched again immediately). A message redelivered after a consumer crash
++            # also counts as a retry.
 +            if getattr(method, "redelivered", False):
 +                self.logger.error(
 +                    f"Error while processing message in the computing queue after a retry: {e}. "
@@ -43,19 +62,32 @@ index 7a230b8..67adc01 100644
 +                )
 +                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 +            else:
++                delay = float(self.conf.get('task_retry_delay', 5))
 +                self.logger.error(
-+                    f"Error while processing message in the computing queue: {e}. Retrying once.",
++                    f"Error while processing message in the computing queue: {e}. "
++                    f"Retrying once in {delay:g} s.",
 +                    exc_info=True
 +                )
++                time.sleep(delay)
 +                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
  
      @abstractmethod
      def enqueue(self):
 diff --git a/tests/tasks/test_queue_task_initializer.py b/tests/tasks/test_queue_task_initializer.py
-index 4321537..fde12b4 100644
+index 9b1b578..16ff0a4 100644
 --- a/tests/tasks/test_queue_task_initializer.py
 +++ b/tests/tasks/test_queue_task_initializer.py
-@@ -87,3 +87,66 @@ def test_successful_pipeline_runs_post_processing():
+@@ -21,7 +21,8 @@ class DummyTask(QueueTaskInitializer):
+ def make_task(**conf):
+     """Build a task without running __init__, which connects to RabbitMQ and the DB."""
+     task = DummyTask.__new__(DummyTask)
+-    task.conf = {"rabbitmq_host": "localhost", "rabbitmq_user": "guest", "rabbitmq_password": "guest", **conf}
++    task.conf = {"rabbitmq_host": "localhost", "rabbitmq_user": "guest", "rabbitmq_password": "guest",
++                 "task_retry_delay": 0, **conf}
+     task.logger = logging.getLogger("test_queue_task_initializer")
+     task.stop_event = multiprocessing.Event()
+     task.processes = []
+@@ -107,3 +108,82 @@ def test_successful_pipeline_runs_post_processing():
      task.start()
  
      assert calls == ["post"]
@@ -99,6 +131,22 @@ index 4321537..fde12b4 100644
 +
 +    task.callback(ch, Method(redelivered=False), None, pickle.dumps({"x": 1}))
 +
++    assert ch.nacks == [(1, True)]
++
++
++def test_retry_waits_task_retry_delay(monkeypatch):
++    import pickle
++    import protein_information_system.tasks.queue as queue_module
++
++    slept = []
++    monkeypatch.setattr(queue_module.time, "sleep", slept.append)
++    task = make_task(task_retry_delay=7)
++    task.process = _failing_process
++    ch = FakeChannel()
++
++    task.callback(ch, Method(redelivered=False), None, pickle.dumps({"x": 1}))
++
++    assert slept == [7.0]
 +    assert ch.nacks == [(1, True)]
 +
 +
