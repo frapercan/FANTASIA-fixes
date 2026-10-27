@@ -17,6 +17,7 @@ from tqdm import tqdm
 __all__ = [
     "download_embeddings",
     "load_dump_to_db",
+    "reference_has_embeddings",
     "parse_unknown_args",
     "compute_metrics",
     "run_smith_waterman_from_strings",
@@ -191,7 +192,7 @@ def load_dump_to_db(
         return False
 
     url = (
-        f"postgresql://{db_config['DB_USERNAME']}:{db_config['DB_PASSWORD']}"
+        f"postgresql+psycopg2://{db_config['DB_USERNAME']}:{db_config['DB_PASSWORD']}"
         f"@{db_config['DB_HOST']}:{db_config['DB_PORT']}/{db_config['DB_NAME']}"
     )
 
@@ -271,6 +272,29 @@ def _is_ignorable_restore_error(message: str) -> bool:
     return "unrecognized configuration parameter" in message and any(
         f'"{name}"' in message for name in _IGNORABLE_RESTORE_SETTINGS
     )
+
+
+# psycopg2 is the driver shipped with protein-information-system. A bare
+# "postgresql://" URL selects psycopg (v3) by default since SQLAlchemy 2.1.
+def reference_has_embeddings(db_config: Mapping[str, Any]) -> bool:
+    """
+    Return True if the reference database holds at least one embedding.
+
+    A missing ``sequence_embeddings`` table (database never initialized) counts
+    as empty.
+    """
+    url = (
+        f"postgresql+psycopg2://{db_config['DB_USERNAME']}:{db_config['DB_PASSWORD']}"
+        f"@{db_config['DB_HOST']}:{db_config['DB_PORT']}/{db_config['DB_NAME']}"
+    )
+    engine = create_engine(url, pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT to_regclass('public.sequence_embeddings')")).scalar() is None:
+                return False
+            return conn.execute(text("SELECT EXISTS (SELECT 1 FROM sequence_embeddings)")).scalar()
+    finally:
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------

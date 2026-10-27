@@ -12,21 +12,28 @@ Fixes
   fails, and the deployment scripts stop when it does (#57, #61).
 - `pg_restore` errors limited to `SET transaction_timeout` (client 18 against
   an older server) are reported as warnings instead of failures (#57).
-- `fantasia run` stops with an explicit error when the reference database has
-  no embeddings, instead of skipping every batch and finishing without
-  results (#61).
+- `fantasia run` checks the reference database before the embedding stage and
+  stops with an explicit error when it has no embeddings, instead of skipping
+  every batch and finishing without results (#61).
+- Database URLs name the `psycopg2` driver explicitly. SQLAlchemy 2.1 selects
+  `psycopg` (v3) for bare `postgresql://` URLs, which made `fantasia initialize`
+  fail on fresh installations before reaching `pg_restore`.
+- `initialize` messages from the download and restore helpers (including
+  `pg_restore` errors) now reach the FANTASIA log files.
 - The final-layer reference URL is enabled by default in `config.yaml`, as its
   comment already stated (#53).
 - Alignment metrics skip pairs with an empty sequence instead of crashing in
-  parasail; the metrics are reported as missing (#60).
+  parasail; the metrics are reported as missing, and post-processing treats
+  them as missing instead of failing on the empty columns (#60). Previously the
+  whole batch lost its results.
 - PostgreSQL clients use UTF-8 (`PGCLIENTENCODING=UTF8`) and deployment scripts
   create UTF-8 clusters, fixing decoding errors under `LC_ALL=C`; removed the
   non-ASCII character from `constants.yaml` (#55).
 - `embeddings_url` accepts `file://` URLs and local paths, used in place
   without copying (#54).
-- The default `--config` and `go-basic.obo` are resolved from the installation
-  directory, not the working directory, so the image no longer depends on
-  `WORKDIR /app` (#46).
+- The default `--config`, `constants.yaml` and `go-basic.obo` are resolved from
+  the installation directory, not the working directory, so the image no
+  longer depends on `WORKDIR /app` (#46).
 - Documented that `delete_queues: true` deletes every queue on the broker and
   how to share one reference database (#56).
 

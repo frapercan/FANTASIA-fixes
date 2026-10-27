@@ -52,7 +52,12 @@ except ImportError:  # Python <3.8 test environments; production requires 3.12
 from protein_information_system.helpers.logger.logger import setup_logger
 
 from fantasia.src.embedder import SequenceEmbedder
-from fantasia.src.helpers.helpers import download_embeddings, load_dump_to_db, parse_unknown_args
+from fantasia.src.helpers.helpers import (
+    download_embeddings,
+    load_dump_to_db,
+    parse_unknown_args,
+    reference_has_embeddings,
+)
 from fantasia.src.lookup import EmbeddingLookUp
 from protein_information_system.helpers.config.yaml import read_yaml_config
 import protein_information_system.sql.model.model  # noqa: F401
@@ -205,10 +210,10 @@ def initialize(conf):
     tar_path = os.path.join(embeddings_dir, filename)
 
     logger.info(f"Fetching reference embeddings from {embeddings_url}...")
-    dump_path = download_embeddings(embeddings_url, tar_path)
+    dump_path = download_embeddings(embeddings_url, tar_path, logger=logger)
 
     logger.info("Loading embeddings into the database...")
-    if not load_dump_to_db(dump_path, conf):
+    if not load_dump_to_db(dump_path, conf, logger=logger):
         raise RuntimeError(
             f"Could not load the reference dump {dump_path} into the database; "
             "see the pg_restore errors above."
@@ -263,6 +268,14 @@ def run_pipeline(conf):
 
         if conf.get("only_lookup") and conf.get("only_embedding"):
             raise ValueError("'only_lookup' and 'only_embedding' cannot both be true.")
+
+        # Check the reference before spending hours on embeddings that cannot be used.
+        if not conf.get("only_embedding") and not reference_has_embeddings(conf):
+            raise RuntimeError(
+                "The reference database contains no embeddings. Run 'fantasia initialize' "
+                "with a valid embeddings_url and check that the dump was restored "
+                "(see the initialize log for pg_restore errors)."
+            )
 
         if conf.get("only_lookup"):
             conf["embeddings_path"] = conf["input"]
@@ -361,6 +374,20 @@ def setup_experiment_directories(conf, timestamp):
     return conf
 
 
+BUNDLED_CONSTANTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constants.yaml")
+
+
+def resolve_constants_path(path):
+    """Return ``path`` if it exists, otherwise the constants.yaml bundled with FANTASIA."""
+    if path and os.path.isfile(os.path.expanduser(path)):
+        return os.path.expanduser(path)
+    if path and path not in ("./fantasia/constants.yaml", "fantasia/constants.yaml"):
+        logging.getLogger("fantasia").warning(
+            "Constants file %s not found; using the bundled %s.", path, BUNDLED_CONSTANTS_PATH
+        )
+    return BUNDLED_CONSTANTS_PATH
+
+
 def load_and_merge_config(args, unknown_args):
     """
     Load the base YAML configuration and apply CLI overrides.
@@ -419,6 +446,10 @@ def load_and_merge_config(args, unknown_args):
     for key, value in unknown_args_dict.items():
         if value is not None:
             conf[key] = value
+
+    # 2.1) The packaged config points to ./fantasia/constants.yaml, which only
+    # exists when running from the repository root (WORKDIR /app in Docker).
+    conf["constants"] = resolve_constants_path(conf.get("constants"))
 
     # 3) Canonical mappings (mirror legacy/top-level and CLI flags into nested structure expected downstream)
     # 3.0 Legacy YAML compatibility: accept top-level `redundancy:` / `taxonomy:` blocks

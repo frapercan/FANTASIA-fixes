@@ -1640,6 +1640,12 @@ class EmbeddingLookUp(GPUTaskInitializer):
             dfs = [pl.read_csv(f, ignore_errors=True) for f in flist]
             df = pl.concat(dfs, how="vertical_relaxed")
 
+            # A metric column with no values (e.g. alignments skipped for an empty
+            # sequence) is read as text; cast so aggregation treats it as missing.
+            df = df.with_columns([
+                pl.col(c).cast(pl.Float64, strict=False) for c in metrics if c in df.columns
+            ])
+
             if df.is_empty():
                 self.logger.debug("post_processing: accession %s has empty data, skipping", accession)
                 continue

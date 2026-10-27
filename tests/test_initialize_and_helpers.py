@@ -165,7 +165,7 @@ def _load_main(monkeypatch, load_dump_result, download_calls):
     module("fantasia.src.embedder", SequenceEmbedder=object)
     module("fantasia.src.lookup", EmbeddingLookUp=object)
 
-    def download(url, tar_path):
+    def download(url, tar_path, **kwargs):
         download_calls.append((url, tar_path))
         return Path(tar_path)
 
@@ -173,6 +173,7 @@ def _load_main(monkeypatch, load_dump_result, download_calls):
         "fantasia.src.helpers.helpers",
         download_embeddings=download,
         load_dump_to_db=lambda *a, **k: load_dump_result,
+        reference_has_embeddings=lambda *a, **k: False,
         parse_unknown_args=lambda *a, **k: {},
     )
     sys.modules.pop("fantasia.main", None)
@@ -213,3 +214,14 @@ def test_postgres_client_encoding_defaults_to_utf8(monkeypatch):
     _load_main(monkeypatch, load_dump_result=True, download_calls=[])
     import os
     assert os.environ["PGCLIENTENCODING"] == "UTF8"
+
+
+def test_constants_path_falls_back_to_bundled_file(monkeypatch, tmp_path):
+    main = _load_main(monkeypatch, load_dump_result=True, download_calls=[])
+    monkeypatch.chdir(tmp_path)
+    bundled = main.resolve_constants_path("./fantasia/constants.yaml")
+    assert Path(bundled).is_file()
+    assert Path(bundled).parent.name == "fantasia"
+    custom = tmp_path / "my_constants.yaml"
+    custom.write_text("{}")
+    assert main.resolve_constants_path(str(custom)) == str(custom)
