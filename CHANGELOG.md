@@ -10,6 +10,10 @@ Fixes
   paths, and documentation (#57, #61, #50).
 - `fantasia initialize` now exits with a non-zero status when the restore
   fails, and the deployment scripts stop when it does (#57, #61).
+- Deployment scripts register their cleanup trap before starting PostgreSQL
+  and RabbitMQ, and stop them by PID. Previously the trap was set at the end of
+  the script and matched an unused data path, so the services kept running
+  after the job (and blocked the port for the next one).
 - `pg_restore` errors limited to `SET transaction_timeout` (client 18 against
   an older server) are reported as warnings instead of failures (#57).
 - `fantasia run` checks the reference database before the embedding stage and

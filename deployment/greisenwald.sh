@@ -70,6 +70,37 @@ if [ ! -f "$FANTASIA_SIF" ]; then
     singularity build --disable-cache "$FANTASIA_SIF" docker://cbbio/fantasia:v4.1.2
 fi
 
+# Registered before starting services so they are stopped on any exit,
+# including an early exit when fantasia initialize fails.
+# =======================
+# Cleanup function
+# =======================
+cleanup() {
+    echo "🧹 Cleaning up background services..."
+
+    # Stop PostgreSQL (based on data dir path)
+    if pgrep -f "$DB_DIR" > /dev/null; then
+        echo "🛑 Stopping PostgreSQL..."
+        pkill -f "$DB_DIR"
+    fi
+
+    # Stop RabbitMQ if running
+    if pgrep -f "rabbitmq-server" > /dev/null; then
+        echo "🛑 Stopping RabbitMQ..."
+        pkill -f "rabbitmq-server"
+    fi
+
+    # Remove temporary directory
+    if [[ -d "$SHM_DIR" ]]; then
+        echo "🗑️ Removing temporary directory: $SHM_DIR"
+        rm -rf "$SHM_DIR"
+    fi
+
+}
+
+# Ensure cleanup runs on script exit
+trap cleanup EXIT
+
 # =======================
 # Start PostgreSQL
 # =======================
@@ -146,31 +177,3 @@ singularity exec --nv --bind "$FANTASIA_RUN_DIR:/fantasia" "$FANTASIA_SIF" \
 singularity exec --nv --bind "$FANTASIA_RUN_DIR:/fantasia" "$FANTASIA_SIF" \
     fantasia run --config "$CONFIG_PATH" --base_directory /fantasia
 
-# =======================
-# Cleanup function
-# =======================
-cleanup() {
-    echo "🧹 Cleaning up background services..."
-
-    # Stop PostgreSQL (based on data dir path)
-    if pgrep -f "$DB_DIR" > /dev/null; then
-        echo "🛑 Stopping PostgreSQL..."
-        pkill -f "$DB_DIR"
-    fi
-
-    # Stop RabbitMQ if running
-    if pgrep -f "rabbitmq-server" > /dev/null; then
-        echo "🛑 Stopping RabbitMQ..."
-        pkill -f "rabbitmq-server"
-    fi
-
-    # Remove temporary directory
-    if [[ -d "$SHM_DIR" ]]; then
-        echo "🗑️ Removing temporary directory: $SHM_DIR"
-        rm -rf "$SHM_DIR"
-    fi
-
-}
-
-# Ensure cleanup runs on script exit
-trap cleanup EXIT

@@ -123,6 +123,33 @@ if [ ! -f "$FANTASIA_IMAGE" ]; then
     apptainer build --disable-cache "$FANTASIA_IMAGE" docker://cbbio/fantasia:v4.1.2
 fi
 
+# Registered before starting services so they are stopped on any exit,
+# including an early exit when fantasia initialize fails.
+# =======================
+# Cleanup services on exit
+# =======================
+cleanup() {
+    echo "🧹 Cleaning up background services..."
+
+    if [[ -n "$PG_PID" ]] && kill -0 "$PG_PID" 2>/dev/null; then
+        echo "🛑 Stopping PostgreSQL..."
+        kill "$PG_PID"
+    fi
+
+    if [[ -n "$RABBITMQ_PID" ]] && kill -0 "$RABBITMQ_PID" 2>/dev/null; then
+        echo "🛑 Stopping RabbitMQ..."
+        kill "$RABBITMQ_PID"
+    fi
+    wait 2>/dev/null
+
+    if [[ -d "$SHARED_MEM_DIR" ]]; then
+        echo "🗑️ Removing shared memory directory: $SHARED_MEM_DIR"
+        rm -rf "$SHARED_MEM_DIR"
+    fi
+}
+
+trap cleanup EXIT
+
 # =======================
 # Launch PostgreSQL (pgvector)
 # =======================
@@ -143,6 +170,7 @@ nohup apptainer run \
   --bind "$PGDATA_HOST:/var/lib/postgresql/data" \
   --bind "$PG_RUN:/var/run/postgresql" \
   "$PGVECTOR_IMAGE" > postgres.log 2>&1 &
+PG_PID=$!
 
 # =======================
 # Launch RabbitMQ
@@ -155,6 +183,7 @@ mkdir -p "$RABBITMQ_DATA_DIR"
 nohup apptainer run \
   --bind "$RABBITMQ_DATA_DIR:/var/lib/rabbitmq" \
   "$RABBITMQ_IMAGE" > rabbitmq.log 2>&1 &
+RABBITMQ_PID=$!
 
 # =======================
 # Wait for services to become available
@@ -183,26 +212,3 @@ apptainer exec --nv --bind "$EXECUTION_DIR:/fantasia" "$FANTASIA_IMAGE" \
 apptainer exec --nv --bind "$EXECUTION_DIR:/fantasia" "$FANTASIA_IMAGE" \
     fantasia run --config "$CONFIG_FILE" --input "$INPUT" --prefix "$OUTPUT" $EXTRA --base_directory /fantasia
 
-# =======================
-# Cleanup services on exit
-# =======================
-cleanup() {
-    echo "🧹 Cleaning up background services..."
-
-    if pgrep -f "$POSTGRESQL_DATA" > /dev/null; then
-        echo "🛑 Stopping PostgreSQL..."
-        pkill -f "$POSTGRESQL_DATA"
-    fi
-
-    if pgrep -f "rabbitmq-server" > /dev/null; then
-        echo "🛑 Stopping RabbitMQ..."
-        pkill -f "rabbitmq-server"
-    fi
-
-    if [[ -d "$SHARED_MEM_DIR" ]]; then
-        echo "🗑️ Removing shared memory directory: $SHARED_MEM_DIR"
-        rm -rf "$SHARED_MEM_DIR"
-    fi
-}
-
-trap cleanup EXIT
