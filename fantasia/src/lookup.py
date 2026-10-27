@@ -98,6 +98,22 @@ from protein_information_system.sql.model.entities.protein.protein import Protei
 from protein_information_system.sql.model.entities.sequence.sequence import Sequence
 from protein_information_system.tasks.gpu import GPUTaskInitializer
 
+# go-basic.obo shipped at the repository root, next to the ``fantasia`` package.
+BUNDLED_GO_OBO = Path(__file__).resolve().parents[2] / "go-basic.obo"
+
+
+def _resolve_go_obo_path(conf: dict) -> str:
+    """Return the GO OBO file to load without depending on the working directory.
+
+    Prefers the copy bundled with FANTASIA. Otherwise falls back to
+    ``<base_directory>/go-basic.obo``, where goatools downloads it if missing.
+    """
+    if BUNDLED_GO_OBO.exists():
+        return str(BUNDLED_GO_OBO)
+    base_directory = os.path.expanduser(conf.get("base_directory", "~/fantasia/"))
+    os.makedirs(base_directory, exist_ok=True)
+    return os.path.join(base_directory, "go-basic.obo")
+
 
 class EmbeddingLookUp(GPUTaskInitializer):
     """
@@ -248,8 +264,8 @@ class EmbeddingLookUp(GPUTaskInitializer):
             self.logger.info("Redundancy filter disabled.")
 
         # ---- GO ontology ------------------------------------------------------
-        self.go = get_godag("go-basic.obo", optional_attrs="relationship")
-        self.logger.info("GO DAG loaded successfully from go-basic.obo.")
+        self.go = get_godag(_resolve_go_obo_path(self.conf), optional_attrs="relationship")
+        self.logger.info("GO DAG loaded successfully.")
 
         # ---- Distance metric --------------------------------------------------
         self.distance_metric = self.conf.get("embedding", {}).get("distance_metric", "cosine")
@@ -287,6 +303,7 @@ class EmbeddingLookUp(GPUTaskInitializer):
         self.load_model_definitions()
         self.logger.info("Loaded %d model definitions from DB+config: %s",
                          len(self.types or {}), list(self.types.keys()) if self.types else [])
+        self._ensure_reference_embeddings()
         self.logger.info("Preloading GO annotations from the database...")
         self.preload_annotations()
         self.logger.info("GO annotations cached: %d sequences with annotations.",
@@ -465,6 +482,20 @@ class EmbeddingLookUp(GPUTaskInitializer):
         except Exception as e:
             self.logger.error("Unexpected error during enqueue: %s", e, exc_info=True)
             raise
+
+    def _ensure_reference_embeddings(self) -> None:
+        """Fail fast when the reference database holds no embeddings.
+
+        An empty database (failed restore or skipped ``fantasia initialize``) used to
+        make every batch log "Empty lookup ... Skipping batch" and the run finish
+        without results while reporting success.
+        """
+        if self.session.query(SequenceEmbedding.id).first() is None:
+            raise RuntimeError(
+                "The reference database contains no embeddings. Run 'fantasia initialize' "
+                "with a valid embeddings_url and check that the dump was restored "
+                "(see the initialize log for pg_restore errors)."
+            )
 
     def load_model_definitions(self):
         """Initialize `self.types` by matching DB embedding types with configuration.

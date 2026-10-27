@@ -50,9 +50,10 @@ delete_queues: true           # bool | Drop queues on boot/teardown to avoid sta
 # 2. Final + intermediate layers (larger, more detailed embeddings)
 #    https://zenodo.org/records/17793273/files/BioData_Dec25_esm2_prott5_prostt5_ankh3_large_esm3c_Layers_3Frist_3Last.backup?download=1
 #
+# A file:// URL or a local path to an already downloaded dump is used in place.
 # Leave empty to skip the preload step.
 # ------------------------------------------------------------------------------
-# embeddings_url: "https://zenodo.org/records/17795871/files/BioData_Dec25_esm2_prott5_prostt5_ankh3_large_esm3c_Layer0.backup?download=1"
+embeddings_url: "https://zenodo.org/records/17795871/files/BioData_Dec25_esm2_prott5_prostt5_ankh3_large_esm3c_Layer0.backup?download=1"
 # embeddings_url: "https://zenodo.org/records/17793273/files/BioData_Dec25_esm2_prott5_prostt5_ankh3_large_esm3c_Layers_3Frist_3Last.backup?download=1"
 
 # ==============================================================================

@@ -33,6 +33,10 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)  # noqa: E402
 warnings.filterwarnings("ignore", category=UserWarning)  # noqa: E402
 
 import os
+
+# Talk UTF-8 to PostgreSQL regardless of the server encoding. A cluster created
+# under LC_ALL=C is SQL_ASCII and psycopg2 would otherwise decode text as ASCII.
+os.environ.setdefault("PGCLIENTENCODING", "UTF8")  # noqa: E402
 import platform
 import sys
 import urllib
@@ -169,7 +173,8 @@ def initialize(conf):
         Configuration dictionary. Must contain:
 
         - ``base_directory`` (str): Base directory where embeddings and experiments are stored.
-        - ``embeddings_url`` (str): URL of the reference embeddings archive to be downloaded.
+        - ``embeddings_url`` (str): URL of the reference embeddings archive to be downloaded,
+          or a ``file://`` URL / local path to a dump that is used in place.
 
     Returns
     -------
@@ -186,8 +191,9 @@ def initialize(conf):
     logger = logging.getLogger("FANTASIA")
     embeddings_url = conf.get("embeddings_url")
     if not embeddings_url:
-        logger.info(
-            "No embeddings_url configured; skipping reference dump download and database restore."
+        logger.warning(
+            "No embeddings_url configured; skipping reference dump download and database restore. "
+            "'fantasia run' needs a populated reference database."
         )
         return
 
@@ -198,11 +204,15 @@ def initialize(conf):
     filename = os.path.basename(urllib.parse.urlparse(embeddings_url).path)
     tar_path = os.path.join(embeddings_dir, filename)
 
-    logger.info(f"Downloading reference embeddings to {tar_path}...")
-    download_embeddings(embeddings_url, tar_path)
+    logger.info(f"Fetching reference embeddings from {embeddings_url}...")
+    dump_path = download_embeddings(embeddings_url, tar_path)
 
     logger.info("Loading embeddings into the database...")
-    load_dump_to_db(tar_path, conf)
+    if not load_dump_to_db(dump_path, conf):
+        raise RuntimeError(
+            f"Could not load the reference dump {dump_path} into the database; "
+            "see the pg_restore errors above."
+        )
 
 
 def run_pipeline(conf):
@@ -622,7 +632,11 @@ def main():
 
     if args.command == "initialize":
         logger.info("Starting initialization...")
-        initialize(conf)
+        try:
+            initialize(conf)
+        except Exception:
+            logger.error("Initialization failed.", exc_info=True)
+            sys.exit(1)
 
     elif args.command == "run":
         logger.info("Starting FANTASIA pipeline...")
