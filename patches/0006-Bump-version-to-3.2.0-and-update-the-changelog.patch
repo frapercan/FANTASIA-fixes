@@ -1,0 +1,65 @@
+From f5dab07268c850039091193ae95c64668cfea601 Mon Sep 17 00:00:00 2001
+From: frapercan <frapercan1@alum.us.es>
+Date: Tue, 27 Oct 2026 15:52:53 +0000
+Subject: [PATCH 6/6] Bump version to 3.2.0 and update the changelog
+
+---
+ CHANGELOG.md   | 29 +++++++++++++++++++++++++++++
+ pyproject.toml |  2 +-
+ 2 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index f5ad35a..7e6ce4e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -3,6 +3,35 @@
+ This changelog starts at version 2.0.0.  
+ Previous history is not included.
+ 
++## [3.2.0] - Unreleased
++
++Errors in queue-based tasks are no longer swallowed: a run that lost results
++now fails instead of finishing normally.
++
++### Added
++- `fail_on_task_errors` configuration option (default `True`).
++- `TaskFailuresError`, raised by `QueueTaskInitializer.start()` when tasks failed
++  and were discarded.
++- `QueueTaskInitializer.delete_task_queues()` and `is_task_queue()`.
++
++### Changed
++- `start()` raises `TaskFailuresError` after post-processing when any task was
++  discarded (inserting-queue failures, or computing-queue failures after a
++  retry). Set `fail_on_task_errors: False` to only log a warning.
++- `delete_queues` now deletes only the task's own queues (computing,
++  inserting and per-model computing queues) instead of every queue on the
++  broker. `delete_all_queues()` is unchanged.
++
++### Fixed
++- Errors in `post_processing()` were logged and ignored; they are now raised
++  when the pipeline itself succeeded. A pipeline error is never masked by a
++  post-processing error.
++- A computing task that always failed was requeued forever; with
++  `GPUTaskInitializer` (`basic_get` loop) the pipeline never finished. Failed
++  tasks are now retried once and then discarded.
++- Database connections use `client_encoding=utf8`, so clusters created under
++  `LC_ALL=C` (`SQL_ASCII`) no longer fail on non-ASCII text.
++
+ ## [2.0.0] - 2025-07-28
+ 
+ ### Added
+diff --git a/pyproject.toml b/pyproject.toml
+index caee0e7..3741cdf 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [tool.poetry]
+ name = "protein_information_system"
+-version = "3.1.2"
++version = "3.2.0"
+ description = "Comprehensive Python Module for Protein Data Management: Designed for streamlined integration and processing of protein information from both UniProt and PDB. Equipped with features for concurrent data fetching, robust error handling, and database synchronization."
+ authors = ["frapercan <frapercan1@alum.us.es>"]
+ readme = "README.md"
+-- 
+2.43.0
+

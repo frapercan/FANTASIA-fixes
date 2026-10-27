@@ -1,0 +1,160 @@
+From 28c55d1c4f6a3bd3424701270bc26662110a5f09 Mon Sep 17 00:00:00 2001
+From: frapercan <frapercan1@alum.us.es>
+Date: Tue, 27 Oct 2026 15:31:04 +0000
+Subject: [PATCH 1/6] Raise post-processing errors when the pipeline succeeded
+
+QueueTaskInitializer.start() ran post_processing() in a finally block and
+only logged its exceptions, so a task whose post-processing failed still
+returned normally. FANTASIA, for example, exited with 0 and an incomplete
+summary.csv.
+
+Raise the post-processing error when the pipeline itself completed. If the
+pipeline already failed, keep logging the post-processing error and let the
+original pipeline error propagate, so it is not masked.
+---
+ protein_information_system/tasks/queue.py  | 11 +++
+ tests/tasks/__init__.py                    |  0
+ tests/tasks/test_queue_task_initializer.py | 89 ++++++++++++++++++++++
+ 3 files changed, 100 insertions(+)
+ create mode 100644 tests/tasks/__init__.py
+ create mode 100644 tests/tasks/test_queue_task_initializer.py
+
+diff --git a/protein_information_system/tasks/queue.py b/protein_information_system/tasks/queue.py
+index 6f883d8..7a230b8 100644
+--- a/protein_information_system/tasks/queue.py
++++ b/protein_information_system/tasks/queue.py
+@@ -117,8 +117,14 @@ class QueueTaskInitializer(BaseTaskInitializer):
+         - Enqueue tasks
+         - Launch workers and wait for completion
+         - Run post-processing hook
++
++        Raises:
++            Exception: Any error from the pipeline. An error from the post-processing
++                hook is raised when the pipeline itself succeeded; if the pipeline
++                failed, it is logged and the pipeline error is raised instead.
+         """
+         self.logger.info("Starting the task processing pipeline.")
++        completed = False
+         try:
+             self.setup_rabbitmq()
+             self.logger.info("RabbitMQ set up. Enqueueing tasks…")
+@@ -126,6 +132,7 @@ class QueueTaskInitializer(BaseTaskInitializer):
+             self.logger.info("Tasks enqueued. Starting workers…")
+             self.start_workers()
+             self.logger.info("All workers finished. Running post-processing hook…")
++            completed = True
+         except Exception as e:
+             self.logger.error("Error in task processing pipeline: %s", e, exc_info=True)
+             raise
+@@ -137,6 +144,10 @@ class QueueTaskInitializer(BaseTaskInitializer):
+                 self.logger.info("Post-processing hook completed.")
+             except Exception as e:
+                 self.logger.error("Post-processing hook failed: %s", e, exc_info=True)
++                # Only surface it when the pipeline itself succeeded; otherwise the
++                # original pipeline error is already propagating.
++                if completed:
++                    raise
+ 
+     def start_workers(self):
+         """
+diff --git a/tests/tasks/__init__.py b/tests/tasks/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/tasks/test_queue_task_initializer.py b/tests/tasks/test_queue_task_initializer.py
+new file mode 100644
+index 0000000..4321537
+--- /dev/null
++++ b/tests/tasks/test_queue_task_initializer.py
+@@ -0,0 +1,89 @@
++"""Unit tests for QueueTaskInitializer error handling (no RabbitMQ or database needed)."""
++import logging
++import multiprocessing
++
++import pytest
++
++from protein_information_system.tasks.queue import QueueTaskInitializer
++
++
++class DummyTask(QueueTaskInitializer):
++    def enqueue(self):
++        pass
++
++    def process(self, target):
++        return target
++
++    def store_entry(self, record):
++        pass
++
++
++def make_task(**conf):
++    """Build a task without running __init__, which connects to RabbitMQ and the DB."""
++    task = DummyTask.__new__(DummyTask)
++    task.conf = {"rabbitmq_host": "localhost", "rabbitmq_user": "guest", "rabbitmq_password": "guest", **conf}
++    task.logger = logging.getLogger("test_queue_task_initializer")
++    task.stop_event = multiprocessing.Event()
++    task.processes = []
++    task.threads = []
++    task.setup_rabbitmq = lambda: None
++    task.start_workers = lambda: None
++    return task
++
++
++# ---------------------------------------------------------------------------
++# Post-processing errors
++# ---------------------------------------------------------------------------
++
++def test_post_processing_error_is_raised_when_pipeline_succeeds():
++    task = make_task()
++
++    def failing_post_processing():
++        raise RuntimeError("summary failed")
++
++    task.post_processing = failing_post_processing
++
++    with pytest.raises(RuntimeError, match="summary failed"):
++        task.start()
++    assert task.stop_event.is_set()
++
++
++def test_pipeline_error_is_not_masked_by_post_processing_error():
++    task = make_task()
++
++    def failing_workers():
++        raise ValueError("worker crashed")
++
++    def failing_post_processing():
++        raise RuntimeError("summary failed")
++
++    task.start_workers = failing_workers
++    task.post_processing = failing_post_processing
++
++    with pytest.raises(ValueError, match="worker crashed"):
++        task.start()
++
++
++def test_post_processing_runs_after_pipeline_error():
++    task = make_task()
++    calls = []
++
++    def failing_workers():
++        raise ValueError("worker crashed")
++
++    task.start_workers = failing_workers
++    task.post_processing = lambda: calls.append("post")
++
++    with pytest.raises(ValueError):
++        task.start()
++    assert calls == ["post"]
++
++
++def test_successful_pipeline_runs_post_processing():
++    task = make_task()
++    calls = []
++    task.post_processing = lambda: calls.append("post")
++
++    task.start()
++
++    assert calls == ["post"]
+-- 
+2.43.0
+

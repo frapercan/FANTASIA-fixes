@@ -1,0 +1,153 @@
+From 725f8c03d008b4aa4746eb351939a587607e1806 Mon Sep 17 00:00:00 2001
+From: frapercan <frapercan1@alum.us.es>
+Date: Tue, 27 Oct 2026 15:51:30 +0000
+Subject: [PATCH 4/6] Delete only the task's own queues when delete_queues is
+ enabled
+
+delete_queues called delete_all_queues(), which removes every queue on the
+broker through the HTTP API, including those of other tasks, applications
+and users, along with their pending messages. Two FANTASIA users sharing
+a RabbitMQ server wiped each other's work.
+
+Add delete_task_queues(), which deletes only this task's computing and
+inserting queues and its per-model computing queues (<computing_queue>_*)
+in the connection's vhost, and use it for delete_queues.
+delete_all_queues() is kept unchanged for callers that rely on it.
+
+Verified against RabbitMQ: a foreign queue with a pending message survives
+a FANTASIA run with delete_queues: true, while the task's own queues are
+reset.
+---
+ protein_information_system/config/config.yaml |  3 +-
+ protein_information_system/tasks/queue.py     | 39 +++++++++++++++++--
+ tests/tasks/test_queue_task_initializer.py    | 32 +++++++++++++++
+ 3 files changed, 70 insertions(+), 4 deletions(-)
+
+diff --git a/protein_information_system/config/config.yaml b/protein_information_system/config/config.yaml
+index 15c3948..f661420 100644
+--- a/protein_information_system/config/config.yaml
++++ b/protein_information_system/config/config.yaml
+@@ -45,7 +45,8 @@ rabbitmq_password: guest     # RabbitMQ password for authentication.
+ # Maximum number of items to process (for debugging).
+ limit_execution: 0 # False for complete run.
+ 
+-# Reset queues with each execution.
++# Delete this task's queues (and pending messages) at startup. Only the task's own
++# queues are removed; other queues on the broker are left untouched.
+ delete_queues: True
+ 
+ # Fail the pipeline (raise TaskFailuresError) when tasks failed and were discarded.
+diff --git a/protein_information_system/tasks/queue.py b/protein_information_system/tasks/queue.py
+index b4b16e9..13675bd 100644
+--- a/protein_information_system/tasks/queue.py
++++ b/protein_information_system/tasks/queue.py
+@@ -66,7 +66,7 @@ class QueueTaskInitializer(BaseTaskInitializer):
+         )
+         self.logger.info("QueueTaskInitializer has been successfully initialized.")
+         if self.conf.get('delete_queues', False):
+-            self.delete_all_queues()
++            self.delete_task_queues()
+ 
+         self.connection = self.create_rabbitmq_connection()
+         self.channel = self.connection.channel()
+@@ -444,22 +444,55 @@ class QueueTaskInitializer(BaseTaskInitializer):
+             self.logger.error(f"Failed to fetch queues from RabbitMQ API: {e}")
+             return []
+ 
++    def is_task_queue(self, queue_name):
++        """
++        Return True if ``queue_name`` belongs to this task: its computing and inserting
++        queues, and the per-model computing queues (``<computing_queue>_<model>``).
++        """
++        if queue_name in (self.computing_queue, self.inserting_queue):
++            return True
++        return queue_name.startswith(f"{self.computing_queue}_")
++
++    def delete_task_queues(self):
++        """
++        Delete this task's queues (see :meth:`is_task_queue`) through the RabbitMQ HTTP API.
++
++        Used when ``delete_queues`` is enabled. Queues of other tasks, applications or
++        users on the same broker are left untouched.
++        """
++        params = getattr(self, 'connection_params', None)
++        vhost = params.virtual_host if params is not None else '/'
++        queues = [
++            q for q in self._get_all_queues_from_api()
++            if self.is_task_queue(q['name']) and q.get('vhost', '/') == vhost
++        ]
++        if not queues:
++            self.logger.info("No queues of this task to delete.")
++            return
++        self._delete_queues(queues)
++
+     def delete_all_queues(self):
+         """
+         Deletes all queues from the RabbitMQ server using the HTTP API.
+ 
++        This removes every queue on the broker, including those of other applications
++        and users. ``delete_queues`` uses :meth:`delete_task_queues` instead.
++
+         Raises
+         ------
+         Exception
+             If an error occurs during queue deletion.
+         """
+-        from requests.auth import HTTPBasicAuth
+-
+         # Obtener la lista de todas las colas
+         queues = self._get_all_queues_from_api()
+         if not queues:
+             self.logger.info("No queues to delete.")
+             return
++        self._delete_queues(queues)
++
++    def _delete_queues(self, queues):
++        """Delete the given queues (dicts from the RabbitMQ API) through the HTTP API."""
++        from requests.auth import HTTPBasicAuth
+ 
+         rabbitmq_port_http = self.conf.get('rabbitmq_port_http', 15672)
+         url_base = f"http://{self.conf['rabbitmq_host']}:{rabbitmq_port_http}/api/queues"
+diff --git a/tests/tasks/test_queue_task_initializer.py b/tests/tasks/test_queue_task_initializer.py
+index 2bccafa..4d1f362 100644
+--- a/tests/tasks/test_queue_task_initializer.py
++++ b/tests/tasks/test_queue_task_initializer.py
+@@ -221,3 +221,35 @@ def test_failure_counter_is_shared_with_worker_processes():
+     for p in procs:
+         p.join()
+     assert task.failed_tasks.value == 3
++
++
++# ---------------------------------------------------------------------------
++# delete_queues
++# ---------------------------------------------------------------------------
++
++def test_delete_task_queues_only_deletes_own_queues(monkeypatch):
++    import protein_information_system.tasks.queue as queue_module
++
++    task = make_task()
++    own = [task.computing_queue, task.inserting_queue, f"{task.computing_queue}_ESM"]
++    others = ["othertask_computing", "someone_elses_queue", f"x{task.computing_queue}"]
++    api = [{"name": n, "vhost": "/"} for n in own + others]
++    api.append({"name": task.computing_queue, "vhost": "other_vhost"})
++    task._get_all_queues_from_api = lambda: api
++
++    deleted = []
++
++    class Response:
++        status_code = 204
++        text = ""
++
++    def fake_delete(url, auth):
++        deleted.append(url)
++        return Response()
++
++    monkeypatch.setattr(queue_module.requests, "delete", fake_delete)
++
++    task.delete_task_queues()
++
++    assert sorted(u.rsplit("/", 1)[1] for u in deleted) == sorted(own)
++    assert all("/%2F/" in u for u in deleted)
+-- 
+2.43.0
+

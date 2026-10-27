@@ -1,0 +1,72 @@
+From 47098f1cb162ef2b53c39bc82906fd0fbbe14238 Mon Sep 17 00:00:00 2001
+From: frapercan <frapercan1@alum.us.es>
+Date: Tue, 27 Oct 2026 15:52:22 +0000
+Subject: [PATCH 5/6] Use UTF-8 client encoding for database connections
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A PostgreSQL cluster initialised under LC_ALL=C (common on HPC nodes) has
+SQL_ASCII encoding. psycopg2 then uses an ASCII client encoding and fails
+with UnicodeEncodeError/UnicodeDecodeError on any non-ASCII text, such as
+the "≥" in FANTASIA's constants (CBBIO/FANTASIA#55).
+
+Pass client_encoding=utf8 when creating the engine. Verified against a
+SQL_ASCII cluster: text with "≥", "—" and "α" is written and read back
+correctly.
+---
+ .../sql/base/database_manager.py              |  3 +++
+ tests/sql/__init__.py                         |  0
+ tests/sql/test_database_manager.py            | 22 +++++++++++++++++++
+ 3 files changed, 25 insertions(+)
+ create mode 100644 tests/sql/__init__.py
+ create mode 100644 tests/sql/test_database_manager.py
+
+diff --git a/protein_information_system/sql/base/database_manager.py b/protein_information_system/sql/base/database_manager.py
+index 616ca10..01efc1d 100644
+--- a/protein_information_system/sql/base/database_manager.py
++++ b/protein_information_system/sql/base/database_manager.py
+@@ -41,6 +41,9 @@ class DatabaseManager:
+             max_overflow=0,
+             poolclass=QueuePool,
+             pool_pre_ping=True,
++            # Always talk UTF-8. A cluster created under LC_ALL=C is SQL_ASCII, and
++            # psycopg2 would otherwise decode every text column as ASCII.
++            connect_args={"client_encoding": "utf8"},
+         )
+ 
+         ensure_pgvector_extension(engine)
+diff --git a/tests/sql/__init__.py b/tests/sql/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/sql/test_database_manager.py b/tests/sql/test_database_manager.py
+new file mode 100644
+index 0000000..e468fc9
+--- /dev/null
++++ b/tests/sql/test_database_manager.py
+@@ -0,0 +1,22 @@
++"""Unit tests for DatabaseManager engine options (no database needed)."""
++import protein_information_system.sql.base.database_manager as dbm
++
++
++def test_engine_uses_utf8_client_encoding(monkeypatch):
++    captured = {}
++
++    def fake_create_engine(url, **kwargs):
++        captured["url"] = url
++        captured["kwargs"] = kwargs
++        return object()
++
++    monkeypatch.setattr(dbm, "create_engine", fake_create_engine)
++    monkeypatch.setattr(dbm, "ensure_pgvector_extension", lambda engine: None)
++    monkeypatch.setattr(dbm.Base.metadata, "create_all", lambda engine: None)
++
++    dbm.DatabaseManager({
++        "DB_USERNAME": "u", "DB_PASSWORD": "p", "DB_HOST": "h", "DB_PORT": 5432, "DB_NAME": "d",
++    })
++
++    assert captured["url"].startswith("postgresql+psycopg2://")
++    assert captured["kwargs"]["connect_args"]["client_encoding"] == "utf8"
+-- 
+2.43.0
+
