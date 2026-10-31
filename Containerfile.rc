@@ -1,0 +1,36 @@
+# Release-candidate test image for FANTASIA 4.1.2 (not for release).
+# Same base and system packages as ./Dockerfile; Python dependencies are
+# installed with pip instead of poetry (no poetry.lock: poetry backtracks for
+# hours over boto3/botocore), and protein-information-system 3.2.0 is taken
+# from ./pis (CBBIO/protein-information-system PR #54).
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+        gnupg \
+        lsb-release \
+        mmseqs2 \
+        pkg-config \
+        wget \
+    && sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' \
+    && wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgres.gpg \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN pip install --no-cache-dir ./pis \
+    && pip install --no-cache-dir -e . \
+    && rm -rf ./pis
+
+ENTRYPOINT ["fantasia"]
+CMD ["--help"]
